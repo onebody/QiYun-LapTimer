@@ -12,9 +12,6 @@
 
 # 关于
 
-Phobos LapTimer (or PhobosLT) is a simple but mighty lap timing solution for 5.8GHz FPV pilots. It is designed for personal use and with small drones in mind (2 inch or less), but there is nothing against running it with bigger drones! It is a small standalone device that is self powered and communicates over WiFi with a phone, tablet or laptop. The goal of the project is to have a simple to use and small device that can be used anywhere whenever you want to do a whoop race practice session in your living room or at a local training venue with friends with no fuss.
-Parts of the code are based on [RotorHazard](https://github.com/RotorHazard/RotorHazard) and [ExpressLRS](https://github.com/ExpressLRS/ExpressLRS). Big kudos to people behind these organizations, they are doing A LOT for the community and are shaping the future of FPV. If you don't know these projects yet and have some time, do check them out!
-
 QiYun-LapTimer 是基于[PhobosLT](https://github.com/phobos-/PhobosLT)项目的基础修改、迭代开发而来的，是一款为 5.8GHz FPV 飞手设计的简单却强大的圈速计时解决方案！
 
 ### 特点
