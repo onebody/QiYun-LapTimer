@@ -33,4 +33,5 @@ class Webserver {
 
     bool sendRssi = false;
     uint32_t rssiSentMs = 0;
+    uint32_t nodesRefreshMs = 0;
 };

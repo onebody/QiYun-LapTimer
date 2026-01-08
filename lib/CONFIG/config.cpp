@@ -160,8 +160,12 @@ void Config::setDefaults(void) {
     conf.announcerRate = 10;
     conf.enterRssi = 120;
     conf.exitRssi = 100;
-    strlcpy(conf.ssid, "FCJLY", sizeof(conf.ssid));
-    strlcpy(conf.password, "fcj8949008ly", sizeof(conf.password));
+    // strlcpy(conf.ssid, "FCJLY", sizeof(conf.ssid));
+    // strlcpy(conf.password, "fcj8949008ly", sizeof(conf.password));
+
+    strlcpy(conf.ssid, "ccclubs", sizeof(conf.ssid));
+    strlcpy(conf.password, "88190338", sizeof(conf.password));
+
     strlcpy(conf.pilotName, "", sizeof(conf.pilotName));
     modified = true;
     write();

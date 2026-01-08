@@ -1,0 +1,47 @@
+name: docker-build-and-release
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: platformio/platformio-core:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build firmware and FS
+        run: |
+          pio pkg update
+          pio run -e QiYun-Laptimer
+          pio run -e QiYun-Laptimer -t buildfs
+          mkdir -p dist
+          cp .pio/build/QiYun-Laptimer/firmware.bin dist/
+          cp .pio/build/QiYun-Laptimer/littlefs.bin dist/
+          cp .pio/build/QiYun-Laptimer/partitions.bin dist/
+          cp .pio/build/QiYun-Laptimer/bootloader.bin dist/
+          sha256sum dist/* > dist/checksums.txt
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-build
+          path: dist
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: esp32-build
+          path: dist
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/firmware.bin
+            dist/littlefs.bin
+            dist/partitions.bin
+            dist/bootloader.bin
+            dist/checksums.txt

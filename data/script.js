@@ -302,6 +302,27 @@ function createRssiChart() {
   rssiChart.streamTo(document.getElementById("rssiChart"), 200);
 }
 
+function refreshNodes() {
+  const listEl = document.getElementById("nodes-list");
+  if (!listEl) return;
+  fetch(esp32BaseUrl + "/nodes")
+    .then(r => r.json())
+    .then(data => {
+      const arr = data.nodes || [];
+      listEl.innerHTML = arr.map(n => {
+        const host = n.host || '';
+        const ip = n.ip || '';
+        const product = n.product || '';
+        const mac = n.mac || '';
+        return `<div>${product} ${host} (${ip}) ${mac}</div>`;
+      }).join('') || '<div>未发现设备</div>';
+    })
+    .catch(e => {
+      listEl.innerHTML = '<div>节点读取失败</div>';
+      console.error(e);
+    });
+}
+
 function openTab(evt, tabName) {
   // Declare all variables
   var i, tabcontent, tablinks;
