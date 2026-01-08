@@ -192,7 +192,11 @@ static void handleRoot(AsyncWebServerRequest *request) {
     if (captivePortal(request)) {  // If captive portal redirect instead of displaying the page.
         return;
     }
-    request->send(LittleFS, "/index.html", "text/html");
+    if (LittleFS.exists("/index.html")) {
+        request->send(LittleFS, "/index.html", "text/html");
+    } else {
+        request->send(200, "text/plain", "QiYun-LapTimer is running.\n\nError: Web interface not found (index.html missing).\nPlease upload filesystem using 'pio run -t uploadfs'.");
+    }
 }
 
 static void handleNotFound(AsyncWebServerRequest *request) {
