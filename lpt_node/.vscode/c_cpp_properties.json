@@ -8,6 +8,7 @@
         {
             "name": "PlatformIO",
             "includePath": [
+                "/Users/fcj/workspace/Github_space/QiYun-LapTimer/lpt_node/include",
                 "/Users/fcj/workspace/Github_space/QiYun-LapTimer/lpt_node/src",
                 "/Users/fcj/workspace/Github_space/QiYun-LapTimer/lpt_node/lib/WEBSERVER",
                 "/Users/fcj/.platformio/packages/framework-arduinoespressif32/libraries/ESPmDNS/src",
@@ -256,6 +257,7 @@
             "browse": {
                 "limitSymbolsToIncludedHeaders": true,
                 "path": [
+                    "/Users/fcj/workspace/Github_space/QiYun-LapTimer/lpt_node/include",
                     "/Users/fcj/workspace/Github_space/QiYun-LapTimer/lpt_node/src",
                     "/Users/fcj/workspace/Github_space/QiYun-LapTimer/lpt_node/lib/WEBSERVER",
                     "/Users/fcj/.platformio/packages/framework-arduinoespressif32/libraries/ESPmDNS/src",
