@@ -23,6 +23,11 @@ class LapTimer {
     uint32_t getLapTime();
     bool isLapAvailable();
 
+    void startCalibrationNoise();
+    uint8_t stopCalibrationNoise();
+    void startCalibrationCrossing();
+    uint8_t stopCalibrationCrossing();
+
    private:
     laptimer_state_e state = STOPPED;
     RX5808 *rx;
@@ -40,6 +45,12 @@ class LapTimer {
     uint32_t rssiPeakTimeMs;
 
     bool lapAvailable = false;
+
+    // Calibration
+    bool isCalibratingNoise = false;
+    bool isCalibratingCrossing = false;
+    uint8_t calibrationMaxNoise = 0;
+    uint8_t calibrationMaxPeak = 0;
 
     void lapPeakCapture();
     bool lapPeakCaptured();

@@ -40,6 +40,18 @@ void LapTimer::handleLapTimerUpdate(uint32_t currentTimeMs) {
     rssi[rssiCount] = round(filter.filter(rx->readRssi(), 0));
     // DEBUG("RSSI: %u\n", rssi[rssiCount]);
 
+    if (isCalibratingNoise) {
+        if (rssi[rssiCount] > calibrationMaxNoise) {
+            calibrationMaxNoise = rssi[rssiCount];
+        }
+    }
+
+    if (isCalibratingCrossing) {
+        if (rssi[rssiCount] > calibrationMaxPeak) {
+            calibrationMaxPeak = rssi[rssiCount];
+        }
+    }
+
     switch (state) {
         case STOPPED:
             break;
@@ -117,4 +129,28 @@ uint32_t LapTimer::getLapTime() {
 
 bool LapTimer::isLapAvailable() {
     return lapAvailable;
+}
+
+void LapTimer::startCalibrationNoise() {
+    isCalibratingNoise = true;
+    calibrationMaxNoise = 0;
+    buz->beep(200);
+}
+
+uint8_t LapTimer::stopCalibrationNoise() {
+    isCalibratingNoise = false;
+    buz->beep(200);
+    return calibrationMaxNoise;
+}
+
+void LapTimer::startCalibrationCrossing() {
+    isCalibratingCrossing = true;
+    calibrationMaxPeak = 0;
+    buz->beep(200);
+}
+
+uint8_t LapTimer::stopCalibrationCrossing() {
+    isCalibratingCrossing = false;
+    buz->beep(200);
+    return calibrationMaxPeak;
 }

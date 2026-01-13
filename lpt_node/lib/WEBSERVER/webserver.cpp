@@ -18,9 +18,9 @@ static IPAddress ipAddress;
 static AsyncWebServer server(80);
 static AsyncEventSource events("/events");
 
-static const char *wifi_hostname = "qiyun";
+static const char *wifi_hostname = "QiYun-LapTimer";
 static const char *wifi_ap_ssid_prefix = "QiYun-LapTimer";
-static const char *wifi_ap_password = "123456";
+static const char *wifi_ap_password = "12345678";
 static const char *wifi_ap_address = "33.0.0.1";
 String wifi_ap_ssid;
 
@@ -55,6 +55,7 @@ void Webserver::init(Config *config, LapTimer *lapTimer, BatteryMonitor *batMoni
     }
     changeTimeMs = millis();
     lastStatus = WL_DISCONNECTED;
+    connectionAttempts = 0;
 }
 
 void Webserver::sendRssiEvent(uint8_t rssi) {
@@ -89,8 +90,17 @@ void Webserver::handleWebUpdate(uint32_t currentTimeMs) {
             case WL_NO_SSID_AVAIL:
             case WL_CONNECT_FAILED:
             case WL_CONNECTION_LOST:
-                changeTimeMs = currentTimeMs;
-                changeMode = WIFI_AP;
+                connectionAttempts++;
+                if (connectionAttempts < 3) {
+                    DEBUG("Connection failed, retrying (%d/3)...\n", connectionAttempts);
+                    WiFi.disconnect();
+                    WiFi.begin(conf->getSsid(), conf->getPassword());
+                    changeTimeMs = currentTimeMs;
+                } else {
+                    DEBUG("Connection failed 3 times, switching to AP\n");
+                    changeTimeMs = currentTimeMs;
+                    changeMode = WIFI_AP;
+                }
                 break;
             case WL_DISCONNECTED:  // try reconnection
                 changeTimeMs = currentTimeMs;
@@ -107,15 +117,25 @@ void Webserver::handleWebUpdate(uint32_t currentTimeMs) {
         lastStatus = status;
     }
     if (status != WL_CONNECTED && wifiMode == WIFI_STA && (currentTimeMs - changeTimeMs) > WIFI_CONNECTION_TIMEOUT_MS) {
-        changeTimeMs = currentTimeMs;
         if (!wifiConnected) {
-            changeMode = WIFI_AP;  // if we didnt manage to ever connect to wifi network
+            connectionAttempts++;
+            if (connectionAttempts < 3) {
+                DEBUG("Connection timed out, retrying (%d/3)...\n", connectionAttempts);
+                WiFi.disconnect();
+                WiFi.begin(conf->getSsid(), conf->getPassword());
+                changeTimeMs = currentTimeMs;
+            } else {
+                DEBUG("Connection timed out 3 times, switching to AP\n");
+                changeMode = WIFI_AP;  // if we didnt manage to ever connect to wifi network
+                changeTimeMs = currentTimeMs;
+            }
         } else {
             DEBUG("WiFi Connection failed, reconnecting\n");
             WiFi.reconnect();
             startServices();
             buz->beep(100);
             led->blink(200);
+            changeTimeMs = currentTimeMs;
         }
     }
     if (changeMode != wifiMode && changeMode != WIFI_OFF && (currentTimeMs - changeTimeMs) > WIFI_RECONNECT_TIMEOUT_MS) {
@@ -352,6 +372,76 @@ Battery Voltage:\t%0.1fv";
         led->on(200);
     });
 
+    server.on("/calibration/noise/start", HTTP_POST, [this](AsyncWebServerRequest *request) {
+        timer->startCalibrationNoise();
+        AsyncWebServerResponse* res = request->beginResponse(200, "application/json", "{\"status\": \"OK\"}");
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        request->send(res);
+    });
+
+    server.on("/calibration/noise/stop", HTTP_POST, [this](AsyncWebServerRequest *request) {
+        uint8_t maxNoise = timer->stopCalibrationNoise();
+        char buf[64];
+        snprintf(buf, sizeof(buf), "{\"status\": \"OK\", \"maxNoise\": %u}", maxNoise);
+        AsyncWebServerResponse* res = request->beginResponse(200, "application/json", buf);
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        request->send(res);
+    });
+
+    server.on("/calibration/crossing/start", HTTP_POST, [this](AsyncWebServerRequest *request) {
+        timer->startCalibrationCrossing();
+        AsyncWebServerResponse* res = request->beginResponse(200, "application/json", "{\"status\": \"OK\"}");
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        request->send(res);
+    });
+
+    server.on("/calibration/crossing/stop", HTTP_POST, [this](AsyncWebServerRequest *request) {
+        uint8_t maxPeak = timer->stopCalibrationCrossing();
+        // Here we can fetch the previously measured noise from somewhere, 
+        // or just return the peak and let frontend handle it.
+        // For simplicity, let's just return the peak.
+        // Or if we want to be stateless, we could pass noise as param, but keeping state in Timer is easier.
+        // Let's assume frontend will do the calculation or we can do it here if we stored noise.
+        // We stored maxNoise in timer? No, we reset it. 
+        // Wait, timer->calibrationMaxNoise is member variable, but it gets reset on startCalibrationNoise.
+        // So as long as we don't call startCalibrationNoise again, it holds the value?
+        // Actually, let's check laptimer implementation.
+        // startCalibrationNoise resets calibrationMaxNoise = 0.
+        // So if we run noise calib -> stop -> crossing calib -> stop, calibrationMaxNoise holds the value.
+        // Correct.
+        
+        // Let's implement simple logic here based on RotorHazard:
+        // EnterAt < Peak (we use maxPeak)
+        // EnterAt > Noise (we need maxNoise)
+        // ExitAt < EnterAt
+        // ExitAt > Noise
+
+        // Simple Heuristic:
+        // EnterAt = Noise + (Peak - Noise) * 0.6
+        // ExitAt = Noise + (Peak - Noise) * 0.3
+        
+        // We need to access maxNoise. We should probably add a getter or just make them public, 
+        // or just return peak and let frontend do math. 
+        // Let's return peak and let frontend do math to be flexible.
+        
+        char buf[64];
+        snprintf(buf, sizeof(buf), "{\"status\": \"OK\", \"maxPeak\": %u}", maxPeak);
+        AsyncWebServerResponse* res = request->beginResponse(200, "application/json", buf);
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        request->send(res);
+    });
+
+    server.on("/save_and_restart", HTTP_POST, [this](AsyncWebServerRequest *request) {
+        conf->write();
+        AsyncWebServerResponse* res = request->beginResponse(200, "application/json", "{\"status\": \"OK\"}");
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        res->addHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+        res->addHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Origin");
+        res->addHeader("Access-Control-Max-Age", "600");
+        request->send(res);
+        delay(500);
+        ESP.restart();
+    });
 
     server.on("/config", HTTP_GET, [this](AsyncWebServerRequest *request) {
         AsyncResponseStream *response = request->beginResponseStream("application/json");

@@ -18,6 +18,9 @@ const alarmThreshold = document.getElementById("alarmThreshold");
 // 默认使用相对路径（当从ESP32设备本身提供服务时）
 // 如果从本地开发服务器运行，可以通过URL参数覆盖：?esp32ip=20.0.0.1
 let esp32BaseUrl = '';
+let nodes = [];
+let activeNodeIp = '';
+let eventSources = {}; // map of ip -> EventSource
 
 const freqLookup = [
   [5865, 5845, 5825, 5805, 5785, 5765, 5745, 5725],
@@ -38,8 +41,7 @@ var enterRssi = 120,
 var frequency = 0;
 var announcerRate = 1.0;
 
-var lapNo = -1;
-var lapTimes = [];
+var lapData = {}; // { "PilotName": { lapNo: -1, lapTimes: [] } }
 
 var timerInterval;
 const timer = document.getElementById("timer");
@@ -59,117 +61,32 @@ var minRssiValue = exitRssi - 10;
 var audioEnabled = false;
 var speakObjsQueue = [];
 
-// 自动校准逻辑
-let calibMaxNoise = 0;
-let calibMaxPeak = 0;
-let calibPollInterval = null;
-
-function startCalibNoise() {
-  document.getElementById("calibStep1").style.display = "none";
-  document.getElementById("calibStep2").style.display = "block";
-  calibMaxNoise = 0;
+// 全局错误处理 - 捕获所有未捕获的错误
+window.addEventListener('error', function(event) {
+  console.error('全局错误捕获:', event.error);
+  console.error('错误消息:', event.message);
+  console.error('错误文件:', event.filename);
+  console.error('错误行号:', event.lineno);
+  console.error('错误列号:', event.colno);
   
-  fetch(esp32BaseUrl + "/calibration/noise/start", { method: "POST" })
-    .then(r => r.json())
-    .then(data => {
-      console.log("Started noise calibration");
-      // Poll current RSSI to show progress
-      calibPollInterval = setInterval(() => {
-        document.getElementById("calibNoiseVal").innerText = rssiValue;
-      }, 200);
-    });
-}
-
-function stopCalibNoise() {
-  clearInterval(calibPollInterval);
-  fetch(esp32BaseUrl + "/calibration/noise/stop", { method: "POST" })
-    .then(r => r.json())
-    .then(data => {
-      calibMaxNoise = data.maxNoise;
-      console.log("Stopped noise calibration, maxNoise:", calibMaxNoise);
-      document.getElementById("calibStep2").style.display = "none";
-      document.getElementById("calibStep3").style.display = "block";
-    });
-}
-
-function startCalibCrossing() {
-  document.getElementById("calibStep3").style.display = "none";
-  document.getElementById("calibStep4").style.display = "block";
-  calibMaxPeak = 0;
-
-  fetch(esp32BaseUrl + "/calibration/crossing/start", { method: "POST" })
-    .then(r => r.json())
-    .then(data => {
-      console.log("Started crossing calibration");
-      calibPollInterval = setInterval(() => {
-        document.getElementById("calibPeakVal").innerText = rssiValue;
-      }, 200);
-    });
-}
-
-function stopCalibCrossing() {
-  clearInterval(calibPollInterval);
-  fetch(esp32BaseUrl + "/calibration/crossing/stop", { method: "POST" })
-    .then(r => r.json())
-    .then(data => {
-      calibMaxPeak = data.maxPeak;
-      console.log("Stopped crossing calibration, maxPeak:", calibMaxPeak);
-      
-      // Calculation Logic
-      // EnterAt = Noise + (Peak - Noise) * 0.6
-      // ExitAt = Noise + (Peak - Noise) * 0.3
-      // Ensure values are within 0-255 and logical
-      
-      let recEnter = Math.round(calibMaxNoise + (calibMaxPeak - calibMaxNoise) * 0.60);
-      let recExit = Math.round(calibMaxNoise + (calibMaxPeak - calibMaxNoise) * 0.30);
-      
-      // Basic sanity check
-      if (calibMaxPeak <= calibMaxNoise + 10) {
-        alert("信号峰值与底噪太接近，校准可能不准确！");
-      }
-      
-      if (recEnter > 255) recEnter = 255;
-      if (recExit < 0) recExit = 0;
-      if (recEnter <= recExit) recEnter = recExit + 5;
-
-      document.getElementById("resNoise").innerText = calibMaxNoise;
-      document.getElementById("resPeak").innerText = calibMaxPeak;
-      document.getElementById("recEnter").innerText = recEnter;
-      document.getElementById("recExit").innerText = recExit;
-      
-      // Store for apply
-      document.getElementById("recEnter").dataset.val = recEnter;
-      document.getElementById("recExit").dataset.val = recExit;
-
-      document.getElementById("calibStep4").style.display = "none";
-      document.getElementById("calibStep5").style.display = "block";
-    });
-}
-
-function applyCalib() {
-  let enter = parseInt(document.getElementById("recEnter").dataset.val);
-  let exit = parseInt(document.getElementById("recExit").dataset.val);
-  
-  enterRssiInput.value = enter;
-  updateEnterRssi(enterRssiInput, enter);
-  
-  exitRssiInput.value = exit;
-  updateExitRssi(exitRssiInput, exit);
-  
-  saveConfig().then(() => {
-    alert("校准参数已应用并保存！");
-    resetCalib();
-  });
-}
-
-function resetCalib() {
-  document.getElementById("calibStep1").style.display = "block";
-  document.getElementById("calibStep2").style.display = "none";
-  document.getElementById("calibStep3").style.display = "none";
-  document.getElementById("calibStep4").style.display = "none";
-  document.getElementById("calibStep5").style.display = "none";
-  if (calibPollInterval) clearInterval(calibPollInterval);
-}
+  // 检查是否是WebSocket错误
+  if (event.message && event.message.includes('WebSocket')) {
+    console.error('检测到WebSocket错误，来源:', event.filename || '未知');
+    console.error('错误堆栈:', event.error ? event.error.stack : '无堆栈信息');
+    
+    // 显示错误信息到页面
+    const errorDiv = document.getElementById('global-error-display');
+    if (errorDiv) {
+      errorDiv.innerHTML = `
+        <div style="background-color: #ffcccc; border: 2px solid red; padding: 10px; margin: 10px; border-radius: 5px;">
+          <strong>WebSocket错误:</strong> ${event.message}<br>
+          <strong>来源:</strong> ${event.filename || '未知'}:${event.lineno}:${event.colno}<br>
+          <strong>时间:</strong> ${new Date().toLocaleTimeString()}
+        </div>
+      `;
+    }
+  }
+});
 
 // 创建错误显示区域
 document.addEventListener('DOMContentLoaded', function() {
@@ -250,7 +167,7 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 });
 
-window.onload = function (e) {
+onload = function (e) {
   config.style.display = "block";
   race.style.display = "none";
   calib.style.display = "none";
@@ -273,6 +190,8 @@ window.onload = function (e) {
     otaIframeElem.src = esp32BaseUrl + "/update";
   }
   
+  refreshNodes(); // Fetch and display nodes
+
   fetch(esp32BaseUrl + "/config")
     .then((response) => response.json())
     .then((config) => {
@@ -301,7 +220,7 @@ window.onload = function (e) {
       console.log("config  esp32BaseUrl：="+esp32BaseUrl);
       clearLaps();
       createRssiChart();
-      initEventStream();
+      // initEventStream(); // Replaced by refreshNodes -> connectAllNodes
     })
     .catch(error => {
       console.error('无法连接到ESP32设备:', error);
@@ -390,23 +309,157 @@ function createRssiChart() {
 function refreshNodes() {
   const listEl = document.getElementById("nodes-list");
   if (!listEl) return;
-  fetch(esp32BaseUrl + "/nodes")
+  
+  listEl.innerHTML = '<div>正在搜索设备...</div>';
+  
+  // Use the current origin or a fallback if esp32BaseUrl is empty
+  const baseUrl = esp32BaseUrl || window.location.origin;
+
+  fetch(baseUrl + "/nodes")
     .then(r => r.json())
     .then(data => {
-      const arr = data.nodes || [];
-      listEl.innerHTML = arr.map(n => {
-        const host = n.host || '';
-        const ip = n.ip || '';
-        const product = n.product || '';
-        const mac = n.mac || '';
-        return `<div>${product} ${host} (${ip}) ${mac}</div>`;
-      }).join('') || '<div>未发现设备</div>';
+      nodes = data.nodes || [];
+      if (nodes.length === 0) {
+          // If no nodes found via API, but we are connected to one, add it manually
+          if (esp32BaseUrl) {
+              const ip = esp32BaseUrl.replace('http://', '').replace('https://', '');
+              nodes.push({ product: 'Current', host: 'esp32', ip: ip });
+          }
+      }
+      renderNodes();
+      connectAllNodes(); // Connect SSE for all nodes
     })
     .catch(e => {
-      listEl.innerHTML = '<div>节点读取失败</div>';
+      listEl.innerHTML = '<div>节点读取失败: ' + e.message + '</div>';
       console.error(e);
     });
 }
+
+function addManualNode() {
+  const ipInput = document.getElementById('manualNodeIp');
+  const ip = ipInput.value.trim();
+  
+  if (!ip) {
+      alert('请输入有效的IP地址');
+      return;
+  }
+  
+  // Basic validation (optional)
+  // const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+  // if (!ipRegex.test(ip) && !ip.includes('localhost')) {
+  //    alert('IP地址格式不正确');
+  //    return;
+  // }
+  
+  // Check if already exists
+  const exists = nodes.some(n => n.ip === ip);
+  if (exists) {
+      alert('该设备已在列表中');
+      return;
+  }
+  
+  // Add new node
+  const newNode = {
+      product: 'Manual',
+      host: 'Added',
+      ip: ip
+  };
+  
+  nodes.push(newNode);
+  renderNodes();
+  connectNodeEvents(ip, 'Manual-' + ip);
+  
+  // Try to fetch config to verify and get better name
+  fetch(`http://${ip}/config`)
+      .then(r => r.json())
+      .then(config => {
+          newNode.product = 'Laptimer';
+          newNode.host = config.name || 'Device';
+          renderNodes();
+          // Update event connection with correct name if needed
+          // connectNodeEvents(ip, config.name); 
+      })
+      .catch(e => {
+          console.log(`Failed to fetch config from manual node ${ip}`, e);
+          newNode.product = 'Offline?';
+          renderNodes();
+      });
+      
+  ipInput.value = '';
+}
+
+function renderNodes() {
+  const listEl = document.getElementById("nodes-list");
+  if (!listEl) return;
+  
+  listEl.innerHTML = nodes.map((n, index) => {
+    const ip = n.ip || '';
+    const isActive = (esp32BaseUrl.includes(ip) || (activeNodeIp && ip === activeNodeIp)) ? 'active' : '';
+    return `<div class="node-item ${isActive}" onclick="selectNode('${ip}')">
+      <div class="node-product"><strong>${n.product || 'Device'}</strong></div>
+      <div class="node-info">${n.host || ''}</div>
+      <div class="node-info">${ip}</div>
+    </div>`;
+  }).join('') || '<div>未发现设备</div>';
+}
+
+function selectNode(ip) {
+  activeNodeIp = ip;
+  if (ip.includes('localhost') || ip.includes('127.0.0.1')) {
+      esp32BaseUrl = `http://${ip}`;
+  } else {
+      esp32BaseUrl = `http://${ip}`;
+  }
+  
+  console.log(`Switched to node: ${esp32BaseUrl}`);
+  renderNodes(); // Update active state style
+  
+  // Refresh config for the selected node
+  fetch(esp32BaseUrl + "/config")
+    .then((response) => response.json())
+    .then((config) => {
+      console.log("Config loaded for " + ip, config);
+      // Update UI with new config
+      if (config.freq !== undefined) setBandChannelIndex(config.freq);
+      if (config.minLap) {
+        minLapInput.value = (parseFloat(config.minLap) / 10).toFixed(1);
+        updateMinLap(minLapInput, minLapInput.value);
+      }
+      if (config.alarm) {
+        alarmThreshold.value = (parseFloat(config.alarm) / 10).toFixed(1);
+        updateAlarmThreshold(alarmThreshold, alarmThreshold.value);
+      }
+      if (config.anType !== undefined) announcerSelect.selectedIndex = config.anType;
+      if (config.anRate) {
+        announcerRateInput.value = (parseFloat(config.anRate) / 10).toFixed(1);
+        updateAnnouncerRate(announcerRateInput, announcerRateInput.value);
+      }
+      if (config.enterRssi) {
+        enterRssiInput.value = config.enterRssi;
+        updateEnterRssi(enterRssiInput, enterRssiInput.value);
+      }
+      if (config.exitRssi) {
+        exitRssiInput.value = config.exitRssi;
+        updateExitRssi(exitRssiInput, exitRssiInput.value);
+      }
+      if (config.name) pilotNameInput.value = config.name;
+      if (config.ssid) ssidInput.value = config.ssid;
+      if (config.pwd) pwdInput.value = config.pwd;
+      
+      populateFreqOutput();
+    })
+    .catch(e => {
+        console.error("Failed to load config for " + ip, e);
+        alert("无法连接到节点 " + ip);
+    });
+    
+    // Update OTA iframe
+    const otaIframeElem = document.getElementById('ota-iframe');
+    if (otaIframeElem) {
+      otaIframeElem.src = esp32BaseUrl + "/update";
+    }
+}
+
 
 function openTab(evt, tabName) {
   // Declare all variables
@@ -477,7 +530,7 @@ function updateExitRssi(obj, value) {
 }
 
 function saveConfig() {
-  return fetch(esp32BaseUrl + "/config", {
+  fetch(esp32BaseUrl + "/config", {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -498,26 +551,6 @@ function saveConfig() {
   })
     .then((response) => response.json())
     .then((response) => console.log("/config:" + JSON.stringify(response)));
-}
-
-function saveAndRestartConfig() {
-  saveConfig().then(() => {
-    fetch(esp32BaseUrl + "/save_and_restart", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-      },
-    })
-      .then((response) => response.json())
-      .then((response) => {
-        console.log("/save_and_restart:" + JSON.stringify(response));
-        alert("配置已保存，设备正在重启...");
-      })
-      .catch((error) => {
-        console.error("Error saving config:", error);
-        alert("保存配置失败，请重试");
-      });
-  });
 }
 
 function populateFreqOutput() {
@@ -561,30 +594,48 @@ function beep(duration, frequency, type) {
   }, duration);
 }
 
-function addLap(lapStr) {
-  const pilotName = pilotNameInput.value;
+function addLap(lapStr, pilot) {
+  const pilotName = pilot || pilotNameInput.value || "Unknown";
+  
+  if (!lapData[pilotName]) {
+      lapData[pilotName] = { lapNo: -1, lapTimes: [] };
+  }
+  
+  const pData = lapData[pilotName];
+  
   var last2lapStr = "";
   var last3lapStr = "";
   const newLap = parseFloat(lapStr);
-  lapNo += 1;
+  pData.lapNo += 1;
+  
   const table = document.getElementById("lapTable");
-  const row = table.insertRow(lapNo + 1);
-  const cell1 = row.insertCell(0);
-  const cell2 = row.insertCell(1);
-  const cell3 = row.insertCell(2);
-  const cell4 = row.insertCell(3);
-  cell1.innerHTML = lapNo;
-  if (lapNo == 0) {
+  // Insert at top (after header) or bottom? Original code was bottom.
+  // Using insertRow(-1) or just insertRow(table.rows.length)
+  // Original: table.insertRow(lapNo + 1); 
+  // Wait, original code used lapNo+1 index, which implies it expected rows to match lapNo?
+  // If we have multiple pilots, lapNo+1 logic breaks because rows count != single pilot laps.
+  // We should just append to the end.
+  
+  const row = table.insertRow(-1); 
+  const cell0 = row.insertCell(0); // Pilot
+  const cell1 = row.insertCell(1); // Lap No
+  const cell2 = row.insertCell(2); // Time
+  const cell3 = row.insertCell(3); // 2-Lap
+  const cell4 = row.insertCell(4); // 3-Lap
+  
+  cell0.innerHTML = pilotName;
+  cell1.innerHTML = pData.lapNo;
+  if (pData.lapNo == 0) {
     cell2.innerHTML = "开圈";
   } else {
     cell2.innerHTML = lapStr + " 秒";
   }
-  if (lapTimes.length >= 2 && lapNo != 0) {
-    last2lapStr = (newLap + lapTimes[lapTimes.length - 1]).toFixed(2);
+  if (pData.lapTimes.length >= 2 && pData.lapNo != 0) {
+    last2lapStr = (newLap + pData.lapTimes[pData.lapTimes.length - 1]).toFixed(2);
     cell3.innerHTML = last2lapStr + " 秒";
   }
-  if (lapTimes.length >= 3 && lapNo != 0) {
-    last3lapStr = (newLap + lapTimes[lapTimes.length - 2] + lapTimes[lapTimes.length - 1]).toFixed(2);
+  if (pData.lapTimes.length >= 3 && pData.lapNo != 0) {
+    last3lapStr = (newLap + pData.lapTimes[pData.lapTimes.length - 2] + pData.lapTimes[pData.lapTimes.length - 1]).toFixed(2);
     cell4.innerHTML = last3lapStr + " 秒";
   }
 
@@ -593,25 +644,25 @@ function addLap(lapStr) {
       beep(100, 330, "square");
       break;
     case "1lap":
-      if (lapNo == 0) {
-        queueSpeak("<p>开圈<p>");
+      if (pData.lapNo == 0) {
+        queueSpeak("<p>" + pilotName + " 开圈<p>");
       } else {
-        const lapNoStr = pilotName + " 第 " + lapNo + " 圈, ";
+        const lapNoStr = pilotName + " 第 " + pData.lapNo + " 圈, ";
         const text = "<p>" + lapNoStr + lapStr.replace(".", ",") + "</p>";
         queueSpeak(text);
       }
       break;
     case "2lap":
-      if (lapNo == 0) {
-        queueSpeak("<p>Hole Shot<p>");
+      if (pData.lapNo == 0) {
+        queueSpeak("<p>" + pilotName + " Hole Shot<p>");
       } else if (last2lapStr != "") {
         const text2 = "<p>" + pilotName + " 两圈累计 " + last2lapStr.replace(".", ",") + "</p>";
         queueSpeak(text2);
       }
       break;
     case "3lap":
-      if (lapNo == 0) {
-        queueSpeak("<p>Hole Shot<p>");
+      if (pData.lapNo == 0) {
+        queueSpeak("<p>" + pilotName + " Hole Shot<p>");
       } else if (last3lapStr != "") {
         const text3 = "<p>" + pilotName + " 三圈累计 " + last3lapStr.replace(".", ",") + "</p>";
         queueSpeak(text3);
@@ -620,7 +671,7 @@ function addLap(lapStr) {
     default:
       break;
   }
-  lapTimes.push(newLap);
+  pData.lapTimes.push(newLap);
 }
 
 function startTimer() {
@@ -649,14 +700,7 @@ function startTimer() {
     timer.innerHTML = `${m}:${s}:${ms} s`;
   }, 10);
 
-  fetch(esp32BaseUrl + "/timer/start", {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-    },
-  })
-    .then((response) => response.json())
-    .then((response) => console.log("/timer/start:" + JSON.stringify(response)));
+  // Fetch removed - moved to startRace to handle multiple nodes
 }
 
 function queueSpeak(obj) {
@@ -712,6 +756,20 @@ async function startRace() {
   beep(500, 880, "square");
   startTimer();
   stopRaceButton.disabled = false;
+  
+  // Start race on all nodes
+  nodes.forEach(node => {
+      const url = `http://${node.ip}`;
+      fetch(url + "/timer/start", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+        },
+      })
+      .then((response) => response.json())
+      .then((response) => console.log(`/timer/start for ${node.ip}:` + JSON.stringify(response)))
+      .catch(e => console.error(`Failed to start timer on ${node.ip}`, e));
+  });
 }
 
 function stopRace() {
@@ -719,14 +777,19 @@ function stopRace() {
   clearInterval(timerInterval);
   timer.innerHTML = "00:00:00 秒";
 
-  fetch(esp32BaseUrl + "/timer/stop", {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-    },
-  })
-    .then((response) => response.json())
-    .then((response) => console.log("/timer/stop:" + JSON.stringify(response)));
+  // Stop race on all nodes
+  nodes.forEach(node => {
+      const url = `http://${node.ip}`;
+      fetch(url + "/timer/stop", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+        },
+      })
+      .then((response) => response.json())
+      .then((response) => console.log(`/timer/stop for ${node.ip}:` + JSON.stringify(response)))
+      .catch(e => console.error(`Failed to stop timer on ${node.ip}`, e));
+  });
 
   stopRaceButton.disabled = true;
   startRaceButton.disabled = false;
@@ -734,24 +797,34 @@ function stopRace() {
 
 function clearLaps() {
   var tableHeaderRowCount = 1;
+  const lapTable = document.getElementById("lapTable");
   var rowCount = lapTable.rows.length;
   for (var i = tableHeaderRowCount; i < rowCount; i++) {
     lapTable.deleteRow(tableHeaderRowCount);
   }
-  lapNo = -1;
-  lapTimes = [];
+  lapData = {};
 }
 
-function initEventStream() {
-  console.log("events  esp32BaseUrl：="+esp32BaseUrl);
-  if (!window.EventSource || !esp32BaseUrl) return;
-  var source = new EventSource(esp32BaseUrl + "/events");
+function connectAllNodes() {
+  nodes.forEach(node => {
+      connectNodeEvents(node.ip, node.host || node.product);
+  });
+}
+
+function connectNodeEvents(ip, pilotName) {
+  if (!ip) return;
+  if (eventSources[ip]) return; // Already connected
+
+  const url = `http://${ip}`;
+  console.log(`Connecting events for ${ip} (${pilotName})`);
+  
+  var source = new EventSource(url + "/events");
+  eventSources[ip] = source;
 
   source.addEventListener(
     "open",
     function (e) {
-      console.log("events open esp32BaseUrl：="+esp32BaseUrl);
-      console.log("Events Connected");
+      console.log(`Events Connected for ${ip}`);
     },
     false
   );
@@ -759,9 +832,12 @@ function initEventStream() {
   source.addEventListener(
     "error",
     function (e) {
-      console.log("events error  esp32BaseUrl：="+esp32BaseUrl);
+      console.log(`Events error for ${ip}`);
       if (e.target.readyState != EventSource.OPEN) {
-        console.log("Events Disconnected");
+        console.log(`Events Disconnected for ${ip}`);
+        // Optional: retry logic or cleanup
+        source.close();
+        delete eventSources[ip];
       }
     },
     false
@@ -770,11 +846,14 @@ function initEventStream() {
   source.addEventListener(
     "rssi",
     function (e) {
-      rssiBuffer.push(e.data);
-      if (rssiBuffer.length > 10) {
-        rssiBuffer.shift();
+      // Only process RSSI for the active node or if we want to show multiple RSSI charts (not supported yet)
+      if (activeNodeIp === ip || (!activeNodeIp && ip === esp32BaseUrl.replace('http://', ''))) {
+          rssiBuffer.push(e.data);
+          if (rssiBuffer.length > 10) {
+            rssiBuffer.shift();
+          }
+          // console.log("rssi", e.data, "buffer size", rssiBuffer.length);
       }
-      console.log("rssi", e.data, "buffer size", rssiBuffer.length);
     },
     false
   );
@@ -783,12 +862,13 @@ function initEventStream() {
     "lap",
     function (e) {
       var lap = (parseFloat(e.data) / 1000).toFixed(2);
-      addLap(lap);
-      console.log("lap raw:", e.data, " formatted:", lap);
+      addLap(lap, pilotName); // Pass pilot name
+      console.log(`Lap from ${pilotName}: raw:`, e.data, " formatted:", lap);
     },
     false
   );
 }
+
 
 function setBandChannelIndex(freq) {
   for (var i = 0; i < freqLookup.length; i++) {
