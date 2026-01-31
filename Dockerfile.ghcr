@@ -1,4 +1,0 @@
-FROM ghcr.io/nginxinc/nginx-unprivileged:alpine
-COPY data /usr/share/nginx/html
-USER 101
-EXPOSE 8080
